@@ -1,10 +1,12 @@
 from PyQt5.QtGui import QPixmap
+from PyQt5.QtWidgets import QInputDialog
 import sounddevice as sd
 import soundfile as sf
 import librosa as lb
 import numpy as np
 from numpy import mean, var
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import OneClassSVM
 import warnings
 
 
@@ -84,20 +86,30 @@ class ApplicationManger:
         result = rf_classifier.fit(self.database_features_array, self.file_names)
         return result
 
-    def record_voice(self):
+    def record_and_predict(self):
         duration = 3  # seconds
-        self.recorded_voice = sd.rec(frames=int(44100*duration), samplerate=44100,
+        self.recorded_voice = sd.rec(frames=int(44100 * duration), samplerate=44100,
                                      channels=1, blocking=True, dtype='int16')
         sf.write("output.ogg", self.recorded_voice, 44100)
         self.recorded_voice, sampling_frequency = lb.load("output.ogg")
         self.ui.Spectrogram.canvas.plot_spectrogram(self.recorded_voice, sampling_frequency)
-        
-        # print(f"Omar_Access ({self.c}).ogg")
-        # self.c += 1
+
         self.calculate_sound_features("output.ogg", False)
         model = self.train_model()
         rf_probabilities = model.predict_proba(self.features_array.reshape(1, -1))
         self.check_matching(rf_probabilities[0])
+
+        # Fake voice prediction
+        features = self.features_array.reshape(1, -1)
+        fake_voice_model = OneClassSVM(kernel='rbf', gamma='auto').fit(self.database_features_array)
+        prediction = fake_voice_model.predict(features)
+
+        if prediction[0] == -1:
+            self.ui.Access_Label.setText("Fake Voice Detected")
+            self.ui.Access_Icon_Label.setPixmap(self.wrong_mark_icon)
+        else:
+            self.ui.Access_Label.setText("Genuine Voice")
+            self.ui.Access_Icon_Label.setPixmap(self.right_mark_icon)
 
     def check_matching(self, probs):
         statement_sums = []
@@ -120,15 +132,8 @@ class ApplicationManger:
         
     def verify_sound(self, statement_sums, people_sums):
         access_flag = 0
-        if self.ui.Security_Voice_Code_RadioButton.isChecked():
-            if max(statement_sums) > 0.4:
-                access_flag = 1
-        else:
-            for i in range(4):
-                if (max(people_sums) == people_sums[i] and max(statement_sums) > 0.5
-                        and self.people_check_boxes[i].isChecked()):
-                    access_flag = 1
-
+        if max(statement_sums) > 0.4:
+            access_flag = 1
         self.set_icon(access_flag)
 
     def set_icon(self, flag):
@@ -143,3 +148,26 @@ class ApplicationManger:
         self.ui.Grant_Access_To_Label.setVisible(visibility)
         for check_box in self.people_check_boxes:
             check_box.setVisible(visibility)
+
+    def register_user_voice(self):
+        # Get the user's name using a dialog box
+        user_name, ok_pressed = QInputDialog.getText(None, "Register User", "Enter the name of the user:")
+        if not ok_pressed or not user_name.strip():
+            print("User registration canceled or invalid input.")
+            return
+
+        # Get the word to record using a dialog box
+        word, ok_pressed = QInputDialog.getText(None, "Register User", "Enter the word to record (e.g., 'Access', 'Door', 'Key'):")
+        if not ok_pressed or not word.strip():
+            print("User registration canceled or invalid input.")
+            return
+
+        duration = 3  # seconds
+        print(f"Recording voice for {user_name} saying '{word}'...")
+        recorded_voice = sd.rec(frames=int(44100 * duration), samplerate=44100,
+                                 channels=1, blocking=True, dtype='int16')
+        sd.wait()
+        file_name = f"Voice Dataset/{user_name}_{word}.ogg"
+        sf.write(file_name, recorded_voice, 44100)
+        print(f"Voice registered and saved as {file_name}.")
+        self.calculate_sound_features(file_name, database_flag=True)
